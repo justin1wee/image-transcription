@@ -23,21 +23,21 @@ def get_text(key):
         return None
 
 
-def get_image_url(image_key):
-    return f"https://{PROCESSED_BUCKET}.s3.amazonaws.com/{image_key}"
+# def get_image_url(image_key):
+#     return f"https://{PROCESSED_BUCKET}.s3.amazonaws.com/{image_key}"
 
 # Function to generate S3 image URL 
-# def get_image_url(image_key, expiration=3600):
-#     try:
-#         url = s3.generate_presigned_url(
-#             "get_object",
-#             Params={"Bucket": PROCESSED_BUCKET, "Key": image_key},
-#             ExpiresIn=expiration  
-#         )
-#         return url
-#     except ClientError as e:
-#         st.error(f"Error generating pre-signed URL: {e}")
-#         return None
+def get_image_url(image_key, expiration=3600):
+    try:
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": PROCESSED_BUCKET, "Key": image_key},
+            ExpiresIn=expiration  
+        )
+        return url
+    except ClientError as e:
+        st.error(f"Error generating pre-signed URL: {e}")
+        return None
 
 # Build data
 data = []
@@ -66,6 +66,8 @@ for file in list_processed_files():
                 "Image URL": get_image_url(image_key)
             })
 
+            st.write("DEBUG: Image URL", get_image_url(image_key))
+
 # Create DataFrame
 df = pd.DataFrame(data)
 df["Upload Time"] = pd.to_datetime(df["Upload Time"])
@@ -92,4 +94,6 @@ if search_term:
         st.markdown(f"**Uploaded at:** {row['Upload Time']}")
         st.markdown("**Extracted Text:**")
         st.code(row["Extracted Text"], language="text")
+
+        st.write("DEBUG row:", row)
         st.divider()
