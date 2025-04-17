@@ -5,7 +5,7 @@ import datetime
 from botocore.exceptions import ClientError
 
 # S3 setup
-s3 = boto3.client("s3")
+s3 = boto3.client("s3", region_name="us-east-2")
 PROCESSED_BUCKET = "processed-images-ds4300-project"
 
 # Function to get all processed .txt files
@@ -66,8 +66,6 @@ for file in list_processed_files():
                 "Image URL": get_image_url(image_key)
             })
 
-            st.write("DEBUG: Image URL", get_image_url(image_key))
-
 # Create DataFrame
 df = pd.DataFrame(data)
 df["Upload Time"] = pd.to_datetime(df["Upload Time"])
@@ -94,6 +92,4 @@ if search_term:
         st.markdown(f"**Uploaded at:** {row['Upload Time']}")
         st.markdown("**Extracted Text:**")
         st.code(row["Extracted Text"], language="text")
-
-        st.write("DEBUG row:", row)
         st.divider()
