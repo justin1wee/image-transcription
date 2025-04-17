@@ -6,7 +6,7 @@ from botocore.exceptions import ClientError
 s3 = boto3.client("s3")
 
 # Set your bucket name (placeholder for now)
-BUCKET_NAME = "your-s3-bucket-name-here"  # ← Replace this once your bucket exists
+BUCKET_NAME = "raw-images-ds4300-project"  # ← Replace this once your bucket exists
 
 # Streamlit UI
 st.title("📤 Upload Image to S3")
