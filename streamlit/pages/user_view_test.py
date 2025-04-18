@@ -2,76 +2,37 @@ import streamlit as st
 import pandas as pd
 import boto3
 import datetime
-import pymysql
 import os
 from botocore.exceptions import ClientError
+import matplotlib.pyplot as plt
 
 # S3 setup
 s3 = boto3.client("s3", region_name="us-east-2")
 PROCESSED_BUCKET = "processed-images-ds4300-project"
 
-# RDS Configuration
-RDS_HOST = 'ds4300-mysql-project.cdmu6kgsobyy.us-east-2.rds.amazonaws.com'
-RDS_PORT = 3306
-RDS_USER = 'admin'
-RDS_PASSWORD = 'lambda-function-rds'
-RDS_DB_NAME = 'ds4300_project'
-
-# Function to connect to RDS
-def get_rds_connection():
-    try:
-        conn = pymysql.connect(
-            host=RDS_HOST,
-            port=RDS_PORT,
-            user=RDS_USER,
-            password=RDS_PASSWORD,
-            database=RDS_DB_NAME,
-            cursorclass=pymysql.cursors.DictCursor
-        )
-        return conn
-    except Exception as e:
-        st.error(f"Error connecting to RDS: {e}")
-        return None
-
-# Function to get data from RDS
-def get_extraction_results_from_rds():
-    conn = get_rds_connection()
-    results = []
-    
-    if conn:
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT 
-                        id, 
-                        image_filename, 
-                        text_content, 
-                        confidence, 
-                        word_count, 
-                        char_count, 
-                        upload_timestamp 
-                    FROM extracted_text_results
-                    ORDER BY upload_timestamp DESC
-                """)
-                results = cursor.fetchall()
-            conn.close()
-        except Exception as e:
-            st.error(f"Error fetching data from RDS: {e}")
-    
-    return results
-
-# Existing S3 functions
+# S3 functions
 def list_processed_files():
     response = s3.list_objects_v2(Bucket=PROCESSED_BUCKET)
     files = response.get("Contents", [])
     return [f["Key"] for f in files]
 
-def get_text(key):
+def get_text_with_confidence(key):
     try:
         response = s3.get_object(Bucket=PROCESSED_BUCKET, Key=key)
-        return response["Body"].read().decode("utf-8")
-    except:
-        return None
+        content = response["Body"].read().decode("utf-8")
+        
+        # Extract confidence if available
+        confidence = None
+        text = content
+        if content.startswith("CONFIDENCE:"):
+            first_line = content.split('\n')[0]
+            confidence = float(first_line.replace("CONFIDENCE:", "").replace("%", "").strip())
+            text = "\n".join(content.split('\n')[2:])  # Skip the confidence line and the blank line
+            
+        return text, confidence
+    except Exception as e:
+        st.error(f"Error retrieving text: {e}")
+        return None, None
 
 def get_image_url(image_key, expiration=3600):
     try:
@@ -85,118 +46,121 @@ def get_image_url(image_key, expiration=3600):
         st.error(f"Error generating pre-signed URL: {e}")
         return None
 
+def get_image_size(key, bucket=PROCESSED_BUCKET):
+    """Get the size of an S3 object in KB"""
+    try:
+        response = s3.head_object(Bucket=bucket, Key=key)
+        size_kb = response['ContentLength'] / 1024
+        return round(size_kb, 2)
+    except Exception as e:
+        st.error(f"Error getting image size: {e}")
+        return None
+
+def get_last_modified(key, bucket=PROCESSED_BUCKET):
+    """Get the last modified date of an S3 object"""
+    try:
+        response = s3.head_object(Bucket=bucket, Key=key)
+        return response['LastModified']
+    except Exception as e:
+        return datetime.datetime.now()
+
 # Streamlit UI
 st.set_page_config(page_title="📝 OCR Analytics Dashboard", layout="wide")
-st.title("📊 Handwriting Recognition Dashboard")
+st.title("📊 Text Recognition Dashboard")
 
-# Add data source selection
-data_source = st.sidebar.radio("Data Source:", ["S3 Storage", "RDS Database"])
-
-if data_source == "S3 Storage":
-    # Original S3-based code
-    data = []
-    for file in list_processed_files():
-        if file.endswith("_text.txt"):
-            base_name = file.replace("_text.txt", "")
-            text = get_text(file)
-            image_key = None
-            # Try different image extensions
-            for ext in [".jpg", ".jpeg", ".png"]:
-                try:
-                    s3.head_object(Bucket=PROCESSED_BUCKET, Key=f"images/{base_name + ext}")
-                    image_key = f"images/{base_name + ext}"
-                    break
-                except ClientError:
-                    try:
-                        # Try without the images/ prefix
-                        s3.head_object(Bucket=PROCESSED_BUCKET, Key=base_name + ext)
-                        image_key = base_name + ext
-                        break
-                    except ClientError:
-                        continue
-            # Add to data
-            if image_key:
-                data.append({
-                    "Filename": image_key,
-                    "Upload Time": datetime.datetime.now(),  # Replace with real timestamp if you track it
-                    "Extracted Text": text,
-                    "Word Count": len(text.split()),
-                    "Image URL": get_image_url(image_key)
-                })
-    
-    # Create DataFrame
-    df = pd.DataFrame(data)
-    if not df.empty:
-        df["Upload Time"] = pd.to_datetime(df["Upload Time"])
-
-else:  # RDS Database
-    # Get data from RDS
-    rds_results = get_extraction_results_from_rds()
-    
-    # Transform RDS data to match the format
-    data = []
-    for result in rds_results:
-        image_key = result['image_filename']
+# S3-based code
+data = []
+for file in list_processed_files():
+    if file.endswith("_text.txt"):
+        base_name = file.replace("_text.txt", "")
+        text, confidence = get_text_with_confidence(file)
         
-        # Check if the image exists in the processed bucket (in images folder or root)
-        image_exists = False
-        image_path = ""
-        try:
+        if text is None:
+            continue
+            
+        image_key = None
+        # Try different image extensions
+        for ext in [".jpg", ".jpeg", ".png"]:
             try:
-                s3.head_object(Bucket=PROCESSED_BUCKET, Key=f"images/{image_key}")
-                image_path = f"images/{image_key}"
-                image_exists = True
+                # Try without the images/ prefix since we're not using folders now
+                s3.head_object(Bucket=PROCESSED_BUCKET, Key=base_name + ext)
+                image_key = base_name + ext
+                break
             except ClientError:
-                s3.head_object(Bucket=PROCESSED_BUCKET, Key=image_key)
-                image_path = image_key
-                image_exists = True
-        except ClientError:
-            pass
-        
-        if image_exists:
+                continue
+                
+        # Add to data
+        if image_key:
+            word_count = len(text.split()) if text else 0
+            char_count = len(text) if text else 0
+            image_size = get_image_size(image_key)
+            
             data.append({
                 "Filename": image_key,
-                "Upload Time": result['upload_timestamp'],
-                "Extracted Text": result['text_content'],
-                "Word Count": result['word_count'],
-                "Char Count": result['char_count'],
-                "Confidence": result['confidence'],
-                "Image URL": get_image_url(image_path)
+                "Upload Time": get_last_modified(image_key),
+                "Extracted Text": text,
+                "Word Count": word_count,
+                "Character Count": char_count,
+                "Line Count": text.count('\n') + 1 if text else 0,
+                "Image Size (KB)": image_size,
+                "Confidence": confidence,
+                "Image URL": get_image_url(image_key)
             })
-    
-    # Create DataFrame
-    df = pd.DataFrame(data)
-    if not df.empty:
-        df["Upload Time"] = pd.to_datetime(df["Upload Time"])
 
-# Display data (common for both sources)
+# Create DataFrame
+df = pd.DataFrame(data)
+if not df.empty:
+    df["Upload Time"] = pd.to_datetime(df["Upload Time"])
+    df = df.sort_values("Upload Time", ascending=False)
+
+# Display data
 if df.empty:
     st.info("No data found. Please upload some images to process.")
 else:
     # Show the dashboard
     st.subheader("📁 Uploaded Files Summary")
     
-    # Determine columns to display based on source
-    if data_source == "RDS Database":
-        display_cols = ["Filename", "Upload Time", "Confidence", "Word Count", "Char Count"]
-    else:
-        display_cols = ["Filename", "Upload Time", "Word Count"]
+    # Display metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Documents", f"{len(df)}")
+    with col2:
+        if "Confidence" in df.columns and df["Confidence"].notna().any():
+            st.metric("Average Confidence", f"{df['Confidence'].mean():.2f}%")
+    with col3:
+        st.metric("Average Words", f"{df['Word Count'].mean():.1f}")
+    with col4:
+        if "Image Size (KB)" in df.columns and df["Image Size (KB)"].notna().any():
+            st.metric("Average File Size", f"{df['Image Size (KB)'].mean():.1f} KB")
     
+    # Display columns including Image Size
+    display_cols = ["Filename", "Upload Time", "Word Count", "Confidence", "Image Size (KB)"]
     st.dataframe(df[display_cols])
     
-    # Analytics section (only if using RDS)
-    if data_source == "RDS Database" and not df.empty:
-        st.subheader("📊 OCR Analytics")
+    # Visualization section
+    if "Confidence" in df.columns and df["Confidence"].notna().any():
+        st.subheader("📊 Text Extraction Confidence")
         
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Average Confidence", f"{df['Confidence'].mean():.2f}%")
-        col2.metric("Average Word Count", f"{df['Word Count'].mean():.1f}")
-        col3.metric("Total Images Processed", f"{len(df)}")
-        
-        # Add a chart
-        st.subheader("Confidence by Image")
+        # Display a bar chart
         chart_data = df[["Filename", "Confidence"]].set_index("Filename")
         st.bar_chart(chart_data)
+    
+    # Word count distribution
+    st.subheader("📊 Word Count Distribution")
+    fig, ax = plt.figure(figsize=(10, 6)), plt.subplot(111)
+    ax.hist(df["Word Count"], bins=10, alpha=0.7)
+    ax.set_xlabel("Word Count")
+    ax.set_ylabel("Number of Documents")
+    st.pyplot(fig)
+    
+    # Add a chart for image size vs word count
+    if "Image Size (KB)" in df.columns and df["Image Size (KB)"].notna().any():
+        st.subheader("📊 Image Size vs Word Count")
+        fig2, ax2 = plt.figure(figsize=(10, 6)), plt.subplot(111)
+        ax2.scatter(df["Image Size (KB)"], df["Word Count"], alpha=0.7)
+        ax2.set_xlabel("Image Size (KB)")
+        ax2.set_ylabel("Word Count")
+        st.pyplot(fig2)
     
     # Search functionality
     st.subheader("🔍 Search Image Name Or Transcription")
@@ -214,9 +178,14 @@ else:
             st.markdown(f"**Uploaded at:** {row['Upload Time']}")
             
             # Display confidence if available
-            if "Confidence" in row:
+            if "Confidence" in row and pd.notna(row["Confidence"]):
                 st.markdown(f"**Confidence:** {row['Confidence']:.2f}%")
             
+            # Display image size if available
+            if "Image Size (KB)" in row and pd.notna(row["Image Size (KB)"]):
+                st.markdown(f"**Image Size:** {row['Image Size (KB)']} KB")
+            
+            st.markdown(f"**Word Count:** {row['Word Count']} words")
             st.markdown("**Extracted Text:**")
             st.code(row["Extracted Text"], language="text")
             st.divider()
