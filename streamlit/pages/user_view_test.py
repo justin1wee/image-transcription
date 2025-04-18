@@ -27,13 +27,7 @@ def get_text(key):
     try:
         response = s3.get_object(Bucket=PROCESSED_BUCKET, Key=key)
         content = response["Body"].read().decode("utf-8")
-        
-        # Strip confidence line if it exists
-        text = content
-        if content.startswith("CONFIDENCE:"):
-            text = "\n".join(content.split('\n')[2:])  # Skip the confidence line and the blank line
-            
-        return text
+        return content
     except Exception as e:
         st.error(f"Error retrieving text: {e}")
         return None
@@ -123,40 +117,39 @@ with tab1:
     # S3-based code
     data_s3 = []
     for file in list_processed_files():
-        if file.endswith("_text.txt"):
-            base_name = file.replace("_text.txt", "")
-            text = get_text(file)
+        # Skip non-image files
+        if not file.endswith(('.jpg', '.jpeg', '.png')):
+            continue
+            
+        # Check if corresponding text file exists
+        base_name = os.path.splitext(file)[0]
+        text_file = f"{base_name}_text.txt"
+        
+        try:
+            s3.head_object(Bucket=PROCESSED_BUCKET, Key=text_file)
+            text = get_text(text_file)
             
             if text is None:
                 continue
                 
-            image_key = None
-            # Try different image extensions
-            for ext in [".jpg", ".jpeg", ".png"]:
-                try:
-                    # Try without the images/ prefix since we're not using folders now
-                    s3.head_object(Bucket=PROCESSED_BUCKET, Key=base_name + ext)
-                    image_key = base_name + ext
-                    break
-                except ClientError:
-                    continue
-                    
             # Add to data
-            if image_key:
-                word_count = len(text.split()) if text else 0
-                char_count = len(text) if text else 0
-                image_size = get_image_size(image_key)
-                
-                data_s3.append({
-                    "Filename": image_key,
-                    "Upload Time": get_last_modified(image_key),
-                    "Extracted Text": text,
-                    "Word Count": word_count,
-                    "Character Count": char_count,
-                    "Line Count": text.count('\n') + 1 if text else 0,
-                    "Image Size (KB)": image_size,
-                    "Image URL": get_image_url(image_key)
-                })
+            word_count = len(text.split()) if text else 0
+            char_count = len(text) if text else 0
+            image_size = get_image_size(file)
+            
+            data_s3.append({
+                "Filename": file,
+                "Upload Time": get_last_modified(file),
+                "Extracted Text": text,
+                "Word Count": word_count,
+                "Character Count": char_count,
+                "Line Count": text.count('\n') + 1 if text else 0,
+                "Image Size (KB)": image_size,
+                "Image URL": get_image_url(file)
+            })
+        except ClientError:
+            # Text file doesn't exist for this image, skip it
+            continue
 
     # Create DataFrame
     df_s3 = pd.DataFrame(data_s3)
@@ -254,6 +247,17 @@ with tab2:
     # Display data
     if df_rds.empty:
         st.info("No data found in RDS. Make sure your Lambda function is storing data in RDS.")
+        
+        # Debugging information
+        st.expander("Debugging Information").write("""
+        If your RDS tab is not showing data, check the following:
+        
+        1. Verify that the RDS connection test above succeeds
+        2. Ensure your Lambda function is correctly triggered by uploads to the processed bucket
+        3. Check CloudWatch logs for any Lambda errors
+        4. Verify that data is being inserted into the RDS table
+        5. Check that the table structure matches what the app expects
+        """)
     else:
         # Show the dashboard
         st.subheader("📁 Uploaded Files Summary (RDS)")
@@ -289,20 +293,3 @@ with tab2:
                 st.markdown("**Extracted Text:**")
                 st.code(row["Extracted Text"], language="text")
                 st.divider()
-
-# Instructions for setting up RDS connection
-with tab2:
-    if df_rds.empty:
-        st.subheader("How to Set Up RDS Integration")
-        st.markdown("""
-        To set up the RDS integration:
-        
-        1. **Create an RDS instance** in AWS if you haven't already
-        2. **Update the RDS configuration** at the top of this script with your RDS details
-        3. **Modify your Lambda function** to store extraction results in RDS:
-           - Add RDS connection code
-           - Create the required table 
-           - Insert extraction results along with metadata
-        4. **Ensure security groups** allow connections between Lambda and RDS
-        5. **Test the system** by uploading an image to your raw bucket
-        """)
