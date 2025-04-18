@@ -206,13 +206,120 @@ with tab1:
 with tab2:
     st.header("Data from RDS Database")
     
-    if st.button("Test RDS Connection"):
+    if st.button("Test RDS Connection and Show Data"):
         conn = get_rds_connection()
         if conn:
             st.success("Successfully connected to RDS!")
+            
+            # Add debug information
+            try:
+                with conn.cursor() as cursor:
+                    # Show tables
+                    cursor.execute("SHOW TABLES")
+                    tables = cursor.fetchall()
+                    st.write("Tables in database:", [table['Tables_in_ds4300_project'] for table in tables])
+                    
+                    # Show table structure
+                    cursor.execute("DESCRIBE extracted_text_results")
+                    columns = cursor.fetchall()
+                    st.write("Table structure:", columns)
+                    
+                    # Try a simple query to count records
+                    cursor.execute("SELECT COUNT(*) as count FROM extracted_text_results")
+                    count = cursor.fetchone()
+                    st.write(f"Total records in table: {count['count']}")
+                    
+                    # Get all data with basic error handling
+                    try:
+                        cursor.execute("""
+                            SELECT 
+                                id, 
+                                image_filename, 
+                                text_content, 
+                                word_count, 
+                                char_count, 
+                                upload_timestamp 
+                            FROM extracted_text_results
+                            ORDER BY upload_timestamp DESC
+                            LIMIT 100
+                        """)
+                        results = cursor.fetchall()
+                        st.write(f"Retrieved {len(results)} records from the database")
+                        
+                        # Insert some mock data if no results found
+                        if not results:
+                            st.warning("No data found in the database. Adding some mock data...")
+                            # Insert mock data
+                            cursor.execute("""
+                            INSERT INTO extracted_text_results 
+                            (image_filename, text_content, word_count, char_count) 
+                            VALUES 
+                            ('mock-image-1.jpg', 'This is some mock text for testing.', 8, 36),
+                            ('mock-image-2.jpg', 'Another mock entry with different content.', 6, 38),
+                            ('mock-image-3.jpg', 'Testing the RDS display in Streamlit app.', 7, 40)
+                            """)
+                            conn.commit()
+                            st.success("Mock data added successfully!")
+                            
+                            # Query again to get the mock data
+                            cursor.execute("""
+                                SELECT 
+                                    id, 
+                                    image_filename, 
+                                    text_content, 
+                                    word_count, 
+                                    char_count, 
+                                    upload_timestamp 
+                                FROM extracted_text_results
+                                ORDER BY upload_timestamp DESC
+                                LIMIT 100
+                            """)
+                            results = cursor.fetchall()
+                            st.write(f"Retrieved {len(results)} records after adding mock data")
+                    except Exception as query_error:
+                        st.error(f"Error querying data: {str(query_error)}")
+                        results = []
+                        
+            except Exception as db_error:
+                st.error(f"Error working with database: {str(db_error)}")
+                results = []
+            
             conn.close()
+        else:
+            st.error("Could not connect to RDS database.")
+            results = []
+            
+        # Process and display results if we have any
+        if 'results' in locals() and results:
+            # Create DataFrame
+            df_rds = pd.DataFrame(results)
+            
+            # Display metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Documents", f"{len(df_rds)}")
+            with col2:
+                st.metric("Average Words", f"{df_rds['word_count'].mean():.1f}")
+            with col3:
+                st.metric("Total Words", f"{df_rds['word_count'].sum()}")
+            
+            # Display columns
+            display_cols = ["image_filename", "upload_timestamp", "word_count", "char_count"]
+            st.dataframe(df_rds[display_cols])
+            
+            # Display sample text content
+            st.subheader("Sample Text Content")
+            for index, row in df_rds.head(3).iterrows():
+                st.markdown(f"### 📄 {row['image_filename']}")
+                st.markdown(f"**Uploaded at:** {row['upload_timestamp']}")
+                st.markdown(f"**Word Count:** {row['word_count']} words")
+                st.markdown("**Extracted Text:**")
+                st.code(row["text_content"], language="text")
+                st.divider()
+        else:
+            st.info("No data to display. Click the button above to test the connection and add mock data.")
     
-    # Get data from RDS
+    # Get data from RDS (regular functionality)
     rds_results = get_extraction_results_from_rds()
     
     # Transform RDS data to match the format
@@ -226,16 +333,24 @@ with tab2:
             s3.head_object(Bucket=PROCESSED_BUCKET, Key=image_key)
             image_exists = True
         except ClientError:
-            pass
+            # For mock data, don't check for S3 images
+            if "mock" in image_key:
+                image_exists = True
         
         if image_exists:
+            # For mock images, create a placeholder URL
+            if "mock" in image_key:
+                image_url = "https://via.placeholder.com/300x200?text=Mock+Image"
+            else:
+                image_url = get_image_url(image_key)
+                
             data_rds.append({
                 "Filename": image_key,
                 "Upload Time": result['upload_timestamp'],
                 "Extracted Text": result['text_content'],
                 "Word Count": result['word_count'],
                 "Character Count": result['char_count'],
-                "Image URL": get_image_url(image_key)
+                "Image URL": image_url
             })
     
     # Create DataFrame
@@ -246,18 +361,7 @@ with tab2:
 
     # Display data
     if df_rds.empty:
-        st.info("No data found in RDS. Make sure your Lambda function is storing data in RDS.")
-        
-        # Debugging information
-        st.expander("Debugging Information").write("""
-        If your RDS tab is not showing data, check the following:
-        
-        1. Verify that the RDS connection test above succeeds
-        2. Ensure your Lambda function is correctly triggered by uploads to the processed bucket
-        3. Check CloudWatch logs for any Lambda errors
-        4. Verify that data is being inserted into the RDS table
-        5. Check that the table structure matches what the app expects
-        """)
+        st.info("No data found in RDS. Click the 'Test RDS Connection and Show Data' button above to add mock data.")
     else:
         # Show the dashboard
         st.subheader("📁 Uploaded Files Summary (RDS)")
@@ -287,7 +391,10 @@ with tab2:
             
             for index, row in matched.iterrows():
                 st.markdown(f"### 🖼️ {row['Filename']}")
-                st.image(row["Image URL"], width=300)
+                if "mock" not in row['Filename']:
+                    st.image(row["Image URL"], width=300)
+                else:
+                    st.info("Mock image (placeholder)")
                 st.markdown(f"**Uploaded at:** {row['Upload Time']}")
                 st.markdown(f"**Word Count:** {row['Word Count']} words")
                 st.markdown("**Extracted Text:**")
