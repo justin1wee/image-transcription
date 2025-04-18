@@ -202,11 +202,11 @@ with tab1:
                 st.code(row["Extracted Text"], language="text")
                 st.divider()
 
-# Tab 2: CSV Data (instead of RDS)
+# Tab 2: Database (RDS or CSV)
 with tab2:
-    st.header("Data from CSV")
+    st.header("Data from Database")
     
-    # Function to load CSV data from S3
+    # Function to load CSV data from S3 as a fallback
     def get_extraction_results_from_csv():
         try:
             # Try to get the CSV file from S3
@@ -223,52 +223,42 @@ with tab2:
                 
                 return data
             except Exception as e:
-                st.error(f"Error retrieving CSV: {e}")
-                
-                # If no CSV exists, create a mock one for testing
-                if st.button("Create Mock CSV Data"):
-                    create_mock_csv_data()
-                    st.success("Mock CSV data created! Refresh the page to see it.")
-                
+                st.warning(f"CSV not found or error: {e}")
                 return []
         except Exception as e:
             st.error(f"Error: {e}")
             return []
     
-    # Function to create mock CSV data
-    def create_mock_csv_data():
-        try:
-            # Create CSV in memory
-            csv_buffer = io.StringIO()
-            csv_writer = csv.writer(csv_buffer)
-            
-            # Write header
-            csv_writer.writerow(['image_filename', 'text_content', 'word_count', 'char_count', 'upload_timestamp'])
-            
-            # Write mock data
-            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            csv_writer.writerow(['mock-image-1.jpg', 'This is some mock text for testing.', '8', '36', current_time])
-            csv_writer.writerow(['mock-image-2.jpg', 'Another mock entry with different content.', '6', '38', current_time])
-            csv_writer.writerow(['mock-image-3.jpg', 'Testing the CSV display in Streamlit app.', '7', '40', current_time])
-            
-            # Upload to S3
-            s3.put_object(
-                Bucket=PROCESSED_BUCKET,
-                Key="extraction_results.csv",
-                Body=csv_buffer.getvalue()
-            )
-            return True
-        except Exception as e:
-            st.error(f"Error creating mock data: {e}")
-            return False
+    # First try to get data from RDS
+    rds_results = get_extraction_results_from_rds()
     
-    # Get data from CSV
-    csv_results = get_extraction_results_from_csv()
+    # If RDS has no data, try CSV
+    using_csv = False
+    if not rds_results:
+        st.info("No data found in RDS. Checking CSV data...")
+        rds_results = get_extraction_results_from_csv()
+        using_csv = True
+        if rds_results:
+            st.success("Data loaded from CSV file!")
+        else:
+            st.warning("No data found in RDS or CSV.")
     
-    # Transform CSV data to match the format
-    data_csv = []
-    for result in csv_results:
-        image_key = result['image_filename']
+    # Transform data to match the format
+    data_db = []
+    for result in rds_results:
+        # Handle different formats from RDS vs CSV
+        if using_csv:
+            image_key = result['image_filename']
+            text_content = result['text_content']
+            word_count = int(result['word_count'])
+            char_count = int(result['char_count'])
+            upload_time = result['upload_timestamp']
+        else:
+            image_key = result['image_filename']
+            text_content = result['text_content']
+            word_count = result['word_count']
+            char_count = result['char_count']
+            upload_time = result['upload_timestamp']
         
         # Check if the image exists in the processed bucket
         image_exists = False
@@ -276,51 +266,46 @@ with tab2:
             s3.head_object(Bucket=PROCESSED_BUCKET, Key=image_key)
             image_exists = True
         except ClientError:
-            # For mock data, don't check for S3 images
-            if "mock" in image_key:
-                image_exists = True
+            pass
         
         if image_exists:
-            # For mock images, create a placeholder URL
-            if "mock" in image_key:
-                image_url = "https://via.placeholder.com/300x200?text=Mock+Image"
-            else:
-                image_url = get_image_url(image_key)
+            image_url = get_image_url(image_key)
                 
-            data_csv.append({
+            data_db.append({
                 "Filename": image_key,
-                "Upload Time": result['upload_timestamp'],
-                "Extracted Text": result['text_content'],
-                "Word Count": int(result['word_count']),
-                "Character Count": int(result['char_count']),
+                "Upload Time": upload_time,
+                "Extracted Text": text_content,
+                "Word Count": word_count,
+                "Character Count": char_count,
                 "Image URL": image_url
             })
     
     # Create DataFrame
-    df_csv = pd.DataFrame(data_csv)
-    if not df_csv.empty:
-        df_csv["Upload Time"] = pd.to_datetime(df_csv["Upload Time"])
-        df_csv = df_csv.sort_values("Upload Time", ascending=False)
+    df_db = pd.DataFrame(data_db)
+    if not df_db.empty:
+        df_db["Upload Time"] = pd.to_datetime(df_db["Upload Time"])
+        df_db = df_db.sort_values("Upload Time", ascending=False)
 
     # Display data
-    if df_csv.empty:
-        st.info("No data found in CSV. You can create mock data by clicking the button above.")
+    if df_db.empty:
+        st.info("No data found in database. Try uploading some images for processing.")
     else:
         # Show the dashboard
-        st.subheader("📁 Extracted Text Summary (CSV)")
+        data_source = "RDS" if not using_csv else "CSV"
+        st.subheader(f"📁 Uploaded Files Summary (from {data_source})")
         
         # Display metrics
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Total Documents", f"{len(df_csv)}")
+            st.metric("Total Documents", f"{len(df_db)}")
         with col2:
-            st.metric("Average Words", f"{df_csv['Word Count'].mean():.1f}")
+            st.metric("Average Words", f"{df_db['Word Count'].mean():.1f}")
         with col3:
-            st.metric("Total Words", f"{df_csv['Word Count'].sum()}")
+            st.metric("Total Words", f"{df_db['Word Count'].sum()}")
         
         # Display columns
         display_cols = ["Filename", "Upload Time", "Word Count", "Character Count"]
-        st.dataframe(df_csv[display_cols])
+        st.dataframe(df_db[display_cols])
         
         # Search functionality
         st.subheader("🔍 Search Image Name Or Transcription")
