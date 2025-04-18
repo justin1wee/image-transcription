@@ -15,7 +15,7 @@ RDS_HOST = 'ds4300-mysql-project.cdmu6kgsobyy.us-east-2.rds.amazonaws.com'
 RDS_PORT = 3306
 RDS_USER = 'admin'
 RDS_PASSWORD = 'lambda-function-rds'
-RDS_DB_NAME = 'mysql'
+RDS_DB_NAME = 'ds4300_project'
 
 # Function to connect to RDS
 def get_rds_connection():
