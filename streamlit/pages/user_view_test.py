@@ -4,7 +4,6 @@ import boto3
 import datetime
 import os
 from botocore.exceptions import ClientError
-import matplotlib.pyplot as plt
 
 # S3 setup
 s3 = boto3.client("s3", region_name="us-east-2")
@@ -16,23 +15,20 @@ def list_processed_files():
     files = response.get("Contents", [])
     return [f["Key"] for f in files]
 
-def get_text_with_confidence(key):
+def get_text(key):
     try:
         response = s3.get_object(Bucket=PROCESSED_BUCKET, Key=key)
         content = response["Body"].read().decode("utf-8")
         
-        # Extract confidence if available
-        confidence = None
+        # Strip confidence line if it exists
         text = content
         if content.startswith("CONFIDENCE:"):
-            first_line = content.split('\n')[0]
-            confidence = float(first_line.replace("CONFIDENCE:", "").replace("%", "").strip())
             text = "\n".join(content.split('\n')[2:])  # Skip the confidence line and the blank line
             
-        return text, confidence
+        return text
     except Exception as e:
         st.error(f"Error retrieving text: {e}")
-        return None, None
+        return None
 
 def get_image_url(image_key, expiration=3600):
     try:
@@ -73,7 +69,7 @@ data = []
 for file in list_processed_files():
     if file.endswith("_text.txt"):
         base_name = file.replace("_text.txt", "")
-        text, confidence = get_text_with_confidence(file)
+        text = get_text(file)
         
         if text is None:
             continue
@@ -103,7 +99,6 @@ for file in list_processed_files():
                 "Character Count": char_count,
                 "Line Count": text.count('\n') + 1 if text else 0,
                 "Image Size (KB)": image_size,
-                "Confidence": confidence,
                 "Image URL": get_image_url(image_key)
             })
 
@@ -121,20 +116,17 @@ else:
     st.subheader("📁 Uploaded Files Summary")
     
     # Display metrics
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Documents", f"{len(df)}")
     with col2:
-        if "Confidence" in df.columns and df["Confidence"].notna().any():
-            st.metric("Average Confidence", f"{df['Confidence'].mean():.2f}%")
-    with col3:
         st.metric("Average Words", f"{df['Word Count'].mean():.1f}")
-    with col4:
+    with col3:
         if "Image Size (KB)" in df.columns and df["Image Size (KB)"].notna().any():
             st.metric("Average File Size", f"{df['Image Size (KB)'].mean():.1f} KB")
     
     # Display columns including Image Size
-    display_cols = ["Filename", "Upload Time", "Word Count", "Confidence", "Image Size (KB)"]
+    display_cols = ["Filename", "Upload Time", "Word Count", "Image Size (KB)"]
     st.dataframe(df[display_cols])
     
     # Search functionality
@@ -152,10 +144,6 @@ else:
             st.image(row["Image URL"], width=300)
             st.markdown(f"**Uploaded at:** {row['Upload Time']}")
             
-            # Display confidence if available
-            if "Confidence" in row and pd.notna(row["Confidence"]):
-                st.markdown(f"**Confidence:** {row['Confidence']:.2f}%")
-            
             # Display image size if available
             if "Image Size (KB)" in row and pd.notna(row["Image Size (KB)"]):
                 st.markdown(f"**Image Size:** {row['Image Size (KB)']} KB")
@@ -164,30 +152,3 @@ else:
             st.markdown("**Extracted Text:**")
             st.code(row["Extracted Text"], language="text")
             st.divider()
-
-    # Visualization section
-    if "Confidence" in df.columns and df["Confidence"].notna().any():
-        st.subheader("📊 Text Extraction Confidence")
-        
-        # Display a bar chart
-        chart_data = df[["Filename", "Confidence"]].set_index("Filename")
-        st.bar_chart(chart_data)
-    
-    # Word count distribution
-    st.subheader("📊 Word Count Distribution")
-    fig, ax = plt.figure(figsize=(10, 6)), plt.subplot(111)
-    ax.hist(df["Word Count"], bins=10, alpha=0.7)
-    ax.set_xlabel("Word Count")
-    ax.set_ylabel("Number of Documents")
-    st.pyplot(fig)
-    
-    # Add a chart for image size vs word count
-    if "Image Size (KB)" in df.columns and df["Image Size (KB)"].notna().any():
-        st.subheader("📊 Image Size vs Word Count")
-        fig2, ax2 = plt.figure(figsize=(10, 6)), plt.subplot(111)
-        ax2.scatter(df["Image Size (KB)"], df["Word Count"], alpha=0.7)
-        ax2.set_xlabel("Image Size (KB)")
-        ax2.set_ylabel("Word Count")
-        st.pyplot(fig2)
-    
-    
