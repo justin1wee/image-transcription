@@ -137,31 +137,6 @@ else:
     display_cols = ["Filename", "Upload Time", "Word Count", "Confidence", "Image Size (KB)"]
     st.dataframe(df[display_cols])
     
-    # Visualization section
-    if "Confidence" in df.columns and df["Confidence"].notna().any():
-        st.subheader("📊 Text Extraction Confidence")
-        
-        # Display a bar chart
-        chart_data = df[["Filename", "Confidence"]].set_index("Filename")
-        st.bar_chart(chart_data)
-    
-    # Word count distribution
-    st.subheader("📊 Word Count Distribution")
-    fig, ax = plt.figure(figsize=(10, 6)), plt.subplot(111)
-    ax.hist(df["Word Count"], bins=10, alpha=0.7)
-    ax.set_xlabel("Word Count")
-    ax.set_ylabel("Number of Documents")
-    st.pyplot(fig)
-    
-    # Add a chart for image size vs word count
-    if "Image Size (KB)" in df.columns and df["Image Size (KB)"].notna().any():
-        st.subheader("📊 Image Size vs Word Count")
-        fig2, ax2 = plt.figure(figsize=(10, 6)), plt.subplot(111)
-        ax2.scatter(df["Image Size (KB)"], df["Word Count"], alpha=0.7)
-        ax2.set_xlabel("Image Size (KB)")
-        ax2.set_ylabel("Word Count")
-        st.pyplot(fig2)
-    
     # Search functionality
     st.subheader("🔍 Search Image Name Or Transcription")
     search_type = st.radio("Search in:", ["Extracted Text", "Filename"], horizontal=True)
@@ -189,3 +164,30 @@ else:
             st.markdown("**Extracted Text:**")
             st.code(row["Extracted Text"], language="text")
             st.divider()
+
+    # Visualization section
+    if "Confidence" in df.columns and df["Confidence"].notna().any():
+        st.subheader("📊 Text Extraction Confidence")
+        
+        # Display a bar chart
+        chart_data = df[["Filename", "Confidence"]].set_index("Filename")
+        st.bar_chart(chart_data)
+    
+    # Word count distribution
+    st.subheader("📊 Word Count Distribution")
+    fig, ax = plt.figure(figsize=(10, 6)), plt.subplot(111)
+    ax.hist(df["Word Count"], bins=10, alpha=0.7)
+    ax.set_xlabel("Word Count")
+    ax.set_ylabel("Number of Documents")
+    st.pyplot(fig)
+    
+    # Add a chart for image size vs word count
+    if "Image Size (KB)" in df.columns and df["Image Size (KB)"].notna().any():
+        st.subheader("📊 Image Size vs Word Count")
+        fig2, ax2 = plt.figure(figsize=(10, 6)), plt.subplot(111)
+        ax2.scatter(df["Image Size (KB)"], df["Word Count"], alpha=0.7)
+        ax2.set_xlabel("Image Size (KB)")
+        ax2.set_ylabel("Word Count")
+        st.pyplot(fig2)
+    
+    
